@@ -164,6 +164,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
 </div>
 <div class="flex items-center flex-wrap gap-2 text-xs">
 <span class="bg-black/25 text-amber-100 px-3 py-1.5 rounded-lg border border-white/15" id="googleSyncStatus" role="status">Google Sheets: connecting…</span>
+<span id="stagingCountsStatusHeader" class="basis-full text-[10px] leading-relaxed text-amber-100/90" role="status">Local DB: checking records • Google Sheets: checking records</span>
 </div>
 </div>
 <!-- Navigation Tabs -->
@@ -239,6 +240,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
 <p class="text-[11px] text-slate-500 mt-1">Multiple opened report files</p>
 <label class="mt-3 inline-flex cursor-pointer items-center rounded-lg bg-red-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-800" for="fileInputOpen">Select Opened files</label>
 <div class="mt-2 text-[11px] font-medium text-red-700 flex flex-wrap gap-1 justify-center" id="openFilesList"></div>
+<button id="btnProcessOpenFiles" type="button" class="mt-3 rounded-lg bg-red-700 px-3 py-2 text-xs font-bold text-white hover:bg-red-800">Upload Opened Files to Local DB</button>
 </div>
 </div>
 <!-- Closed Files Upload -->
@@ -252,6 +254,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
 <p class="text-[11px] text-slate-500 mt-1">Multiple closed report files</p>
 <label class="mt-3 inline-flex cursor-pointer items-center rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-800" for="fileInputClosed">Select Closed files</label>
 <div class="mt-2 text-[11px] font-medium text-amber-700 flex flex-wrap gap-1 justify-center" id="closedFilesList"></div>
+<button id="btnProcessClosedFiles" type="button" class="mt-3 rounded-lg bg-amber-700 px-3 py-2 text-xs font-bold text-white hover:bg-amber-800">Upload Closed Files to Local DB</button>
 </div>
 </div>
 <!-- RO Report CSV Upload -->
@@ -302,9 +305,11 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
 <h3 class="text-sm font-bold text-slate-900">Google Sheets Staging &amp; Daily Master</h3>
 <p class="text-xs text-slate-600 mt-1">Files are saved in this browser's local database and synced to Open_Staging / Closed_Staging. Generate one Daily_Master row for every Office Master office using the exact figures calculated in Office-Wise Transaction &amp; Scheme Register.</p>
 <p class="text-xs font-semibold text-slate-600 mt-2" id="stagingStatus" role="status">Local database: initializing…</p>
+<p class="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700" id="stagingCountsStatus" role="status">Local DB: checking records • Google Sheets: checking records</p>
 </div>
 <div class="flex flex-wrap gap-2">
 <button class="rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold px-4 py-2" id="btnSyncStaging" type="button">Sync Staging to Google Sheets</button>
+<button class="rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white text-xs font-bold px-4 py-2" id="btnDownloadMissingSync" type="button">Download Missing from Google + Sync</button>
 <button class="rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold px-4 py-2" id="btnGenerateDailyMaster" type="button">Generate Daily_Master for Selected Date</button>
 <button class="rounded-lg bg-violet-700 hover:bg-violet-800 text-white text-xs font-bold px-4 py-2" id="btnCopyDailySummary" type="button">Copy to DAILY_SUMMARY</button>
 </div>
@@ -318,6 +323,17 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
   <p id="posbLiveExportStatus" class="mt-2 text-xs text-slate-600" role="status">Select a date and export the POSB Live Dashboard CSV.</p>
 </div>
 </div>
+</div>
+<!-- Manual upload/sync results popup -->
+<div id="stagingSyncModal" class="fixed inset-0 z-[100] hidden items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="stagingSyncModalTitle">
+ <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden">
+  <div class="bg-gradient-to-r from-red-800 to-amber-700 px-5 py-4 text-white flex items-center justify-between gap-3">
+   <h3 id="stagingSyncModalTitle" class="font-extrabold text-base">Upload / Google Sheets Sync Details</h3>
+   <button type="button" id="btnCloseStagingSyncModal" class="rounded-lg bg-white/15 px-3 py-1.5 text-sm font-bold hover:bg-white/25">Close</button>
+  </div>
+  <div id="stagingSyncModalBody" class="p-5 max-h-[65vh] overflow-y-auto text-sm text-slate-700"></div>
+  <div class="border-t bg-slate-50 px-5 py-3 text-right"><button type="button" id="btnCloseStagingSyncModalBottom" class="rounded-lg bg-slate-800 px-4 py-2 text-xs font-bold text-white">Done</button></div>
+ </div>
 </div>
 <!-- TAB 1: OVERVIEW & KPIS -->
 <section class="tab-pane" id="tab-overview">
@@ -856,6 +872,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         setStagingStatus('Local database unavailable: ' + (err.message || err), 'error');
         updateAdminSyncOverview('Unavailable', err.message || 'Could not open local browser storage', 'error');
       });
+      refreshStagingCountsStatus().catch(() => {});
     });
 
 
@@ -2006,8 +2023,10 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
       });
 
       // File Inputs
-      document.getElementById('fileInputOpen').addEventListener('change', (e) => handleFileUpload(e.target.files, 'open'));
-      document.getElementById('fileInputClosed').addEventListener('change', (e) => handleFileUpload(e.target.files, 'closed'));
+      document.getElementById('fileInputOpen').addEventListener('change', (e) => showPendingUploadFiles(e.target.files, 'open')); 
+      document.getElementById('btnProcessOpenFiles')?.addEventListener('click', () => handleFileUpload(document.getElementById('fileInputOpen')?.files, 'open'));
+      document.getElementById('fileInputClosed').addEventListener('change', (e) => showPendingUploadFiles(e.target.files, 'closed'));
+      document.getElementById('btnProcessClosedFiles')?.addEventListener('click', () => handleFileUpload(document.getElementById('fileInputClosed')?.files, 'closed'));
       document.getElementById('roReportFile')?.addEventListener('change', event => {
         const list = document.getElementById('roFilesList');
         const file = event.target.files?.[0];
@@ -2018,7 +2037,11 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         item.textContent = file ? '1 RO CSV file selected' : 'No RO CSV file selected';
         list.appendChild(item);
       });
-      document.getElementById('btnSyncStaging').addEventListener('click', () => syncStagingToGoogle(true));
+      document.getElementById('btnSyncStaging').addEventListener('click', () => runManualStagingSync(false));
+      document.getElementById('btnDownloadMissingSync')?.addEventListener('click', () => runManualStagingSync(true));
+      ['btnCloseStagingSyncModal','btnCloseStagingSyncModalBottom'].forEach(id => document.getElementById(id)?.addEventListener('click', closeStagingSyncModal));
+      document.getElementById('stagingSyncModal')?.addEventListener('click', e => { if(e.target.id==='stagingSyncModal') closeStagingSyncModal(); });
+      document.getElementById('stagingSyncModalBody')?.addEventListener('click', e => { if (e.target.closest('#btnUploadPopupGoogleSync')) runManualStagingSync(false); });
       document.getElementById('btnGenerateDailyMaster').addEventListener('click', () => generateDailyMasterForDate());
       document.getElementById('btnCopyDailySummary').addEventListener('click', () => copyDailySummaryForSelectedDate());
       document.getElementById('btnExportPOSBLiveCsv')?.addEventListener('click', exportPOSBLiveDashboardCsv);
@@ -2055,6 +2078,25 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
       document.getElementById('btnCaptureOverviewPng')?.addEventListener('click', captureOverviewForWhatsApp);
       document.getElementById('unmatchedOfficesTableBody')?.addEventListener('click', event => { const btn=event.target.closest('[data-save-unmatched]'); if(btn) saveUnmatchedOffice(btn.getAttribute('data-save-unmatched'),btn); });
       document.getElementById('btnExportNilOffices')?.addEventListener('click', () => exportNilOffices());
+    }
+
+    // A staging record is unique by report type + transaction date + SOL/BOCODE.
+    // This prevents re-uploading the same office/date from multiplying its transactions.
+    function dedupeStageRows(rows, type = '') {
+      const map = new Map();
+      let duplicates = 0;
+      (Array.isArray(rows) ? rows : []).forEach((row, index) => {
+        const rec = { ...row, type: type || row.type || 'open' };
+        const sol = String(rec.sol || '').trim().toUpperCase();
+        const date = normalizeDashboardDate(rec.txnDate || appState.selectedDate || '');
+        if (!sol || !date) return;
+        rec.sol = String(rec.sol || '').trim(); rec.txnDate = date;
+        const key = [rec.type, date, sol].join('|');
+        if (map.has(key)) duplicates++;
+        // Last copy wins; never sum duplicate report rows.
+        map.set(key, rec);
+      });
+      return { rows: [...map.values()], duplicates };
     }
 
     // Multi-file upload: parse each file, persist parsed rows in IndexedDB, then sync the staging sheets.
@@ -2096,11 +2138,13 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
             continue;
           }
           const store = type === 'open' ? appState.openStageRows : appState.closedStageRows;
-          // Re-uploading the same filename replaces that file's previous rows; other files remain.
-          const retained = store.filter(r => !(r.sourceFile === file.name && String(r.txnDate || '') === uploadDate));
-          const merged = retained.concat(records);
-          if (type === 'open') appState.openStageRows = merged;
-          else appState.closedStageRows = merged;
+          // Replace any existing office/date row for each SOL in this file, even if its filename changed.
+          // This is the main duplicate guard for repeated uploads.
+          const uploadedSols = new Set(records.map(r => String(r.sol || '').trim().toUpperCase()).filter(Boolean));
+          const retained = store.filter(r => !(normalizeDashboardDate(r.txnDate || '') === uploadDate && uploadedSols.has(String(r.sol || '').trim().toUpperCase())));
+          const merged = dedupeStageRows(retained.concat(records), type);
+          if (type === 'open') appState.openStageRows = merged.rows;
+          else appState.closedStageRows = merged.rows;
           imported += records.length;
           const fileList = type === 'open' ? appState.openFiles : appState.closedFiles;
           if (!fileList.includes(file.name)) fileList.push(file.name);
@@ -2108,6 +2152,13 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
           failures.push(file.name + ': ' + (err.message || err));
         }
       }
+
+      // Clean up any duplicates already present in memory/previous local storage before persisting.
+      const openClean = dedupeStageRows(appState.openStageRows, 'open');
+      const closedClean = dedupeStageRows(appState.closedStageRows, 'closed');
+      appState.openStageRows = openClean.rows;
+      appState.closedStageRows = closedClean.rows;
+      const duplicateRowsRemoved = openClean.duplicates + closedClean.duplicates;
 
       // Any uploaded SOL/BOCODE missing from Office Master is retained as a real
       // office record (with known upload name and transaction figures), not dropped.
@@ -2135,8 +2186,13 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
       recalculateAll();
       await persistStagingToLocalDb();
       if (imported > 0) {
-        setStagingStatus(imported.toLocaleString() + ' ' + type + ' records saved locally; syncing to Google Sheets…');
-        await syncStagingToGoogle(false);
+        setStagingStatus(imported.toLocaleString() + ' ' + type + ' records saved to local database. Google upload is manual; use Sync Staging to Google Sheets when ready.', 'ok');
+        await refreshStagingCountsStatus();
+        showStagingSyncModal('Local Upload Complete', `<p class="font-bold text-emerald-700 mb-3">Files processed and saved to this browser's local database. Nothing was automatically uploaded to Google Sheets.</p>
+          <div class="grid grid-cols-2 gap-3 mb-4"><div class="rounded-lg bg-blue-50 border border-blue-200 p-3"><div class="text-xs text-blue-800">Rows processed</div><div class="text-xl font-extrabold text-blue-900">${imported.toLocaleString()}</div></div><div class="rounded-lg bg-slate-50 border p-3"><div class="text-xs text-slate-600">New directory offices</div><div class="text-xl font-extrabold">${newlyRegistered.toLocaleString()}</div></div></div>
+          <p><b>Report type:</b> ${type === 'open' ? 'Opened' : 'Closed'}</p><p><b>Transaction date:</b> ${escapeHtml(uploadDate)}</p><p><b>Files selected:</b> ${Array.from(files).map(f=>escapeHtml(f.name)).join('<br>')}</p>
+          ${failures.length ? `<p class="mt-3 font-bold text-red-700">Issues:</p><ul class="list-disc pl-5">${failures.map(f=>`<li>${escapeHtml(f)}</li>`).join('')}</ul>` : '<p class="mt-3 text-emerald-700">All selected files processed successfully.</p>'}
+          <p class="mt-3 text-xs text-slate-500">Ready to copy these records to Google Sheets Open_Staging / Closed_Staging.</p><div class="mt-4 flex flex-wrap gap-2"><button id="btnUploadPopupGoogleSync" type="button" class="rounded-lg bg-emerald-700 px-4 py-2 font-bold text-white hover:bg-emerald-800">Google Sync Now</button><button type="button" onclick="closeStagingSyncModal()" class="rounded-lg bg-slate-200 px-4 py-2 font-bold text-slate-800">Sync Later</button></div><p class="mt-2 text-xs text-slate-500">Duplicate rows removed before local save: ${duplicateRowsRemoved.toLocaleString()}.</p>`);
       }
       if (newlyRegistered) {
         showUnmatchedOfficesModal();
@@ -2456,8 +2512,12 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         const tx = db.transaction('staging', 'readwrite');
         const store = tx.objectStore('staging');
         store.clear();
-        [...appState.openStageRows, ...appState.closedStageRows].forEach((row, i) => {
-          store.put({ ...row, id: (row.type || 'open') + '|' + (row.txnDate || appState.selectedDate || '') + '|' + row.sourceFile + '|' + row.sol + '|' + row.rowNumber + '|' + i });
+        const cleanOpen = dedupeStageRows(appState.openStageRows, 'open').rows;
+        const cleanClosed = dedupeStageRows(appState.closedStageRows, 'closed').rows;
+        appState.openStageRows = cleanOpen; appState.closedStageRows = cleanClosed;
+        [...cleanOpen, ...cleanClosed].forEach(row => {
+          const stableId = [row.type || 'open', normalizeDashboardDate(row.txnDate || appState.selectedDate || ''), String(row.sol || '').trim().toUpperCase()].join('|');
+          store.put({ ...row, id: stableId });
         });
         tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
       });
@@ -2548,13 +2608,8 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         const remote = await jsonpRequest('action=getStaging', 25000);
         if (remote && remote.ok && Array.isArray(remote.openRows) && Array.isArray(remote.closedRows)) {
           const mergeRows = (localRows, remoteRows, type) => {
-            const merged = new Map();
-            [...remoteRows, ...localRows].forEach((row, index) => {
-              const normalized = { ...row, txnDate: row.txnDate || appState.selectedDate, type, rowNumber: row.rowNumber || index + 1 };
-              const key = [normalized.txnDate, normalized.sourceFile, normalized.sol, normalized.rowNumber].map(value => String(value || '')).join('|');
-              merged.set(key, normalized);
-            });
-            return [...merged.values()];
+            const normalized = [...remoteRows, ...localRows].map((row, index) => ({ ...row, txnDate: normalizeDashboardDate(row.txnDate || appState.selectedDate), type, rowNumber: row.rowNumber || index + 1 }));
+            return dedupeStageRows(normalized, type).rows;
           };
           appState.openStageRows = mergeRows(appState.openStageRows, remote.openRows, 'open');
           appState.closedStageRows = mergeRows(appState.closedStageRows, remote.closedRows, 'closed');
@@ -2581,10 +2636,104 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
       }
     }
 
+    function safePopupText(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+    function showPendingUploadFiles(files, type) {
+      const list = document.getElementById(type === 'open' ? 'openFilesList' : 'closedFilesList');
+      if (!list) return;
+      list.replaceChildren();
+      const arr = Array.from(files || []);
+      const item = document.createElement('span');
+      item.className = (type === 'open' ? 'bg-red-100 border-red-200 text-red-800' : 'bg-amber-100 border-amber-200 text-amber-800') + ' px-2 py-1 rounded border';
+      item.textContent = arr.length ? `${arr.length} ${type === 'open' ? 'Opened' : 'Closed'} file(s) selected — click Upload to Local DB` : 'No files selected';
+      list.appendChild(item);
+      if (arr.length) {
+        const names = document.createElement('div');
+        names.className = 'w-full mt-1 text-[10px] text-slate-600';
+        names.textContent = arr.map(f => f.name).join(' • ');
+        list.appendChild(names);
+      }
+    }
+    function showStagingSyncModal(title, bodyHtml) {
+      const modal = document.getElementById('stagingSyncModal');
+      const titleEl = document.getElementById('stagingSyncModalTitle');
+      const body = document.getElementById('stagingSyncModalBody');
+      if (!modal || !body || !titleEl) return;
+      titleEl.textContent = title || 'Upload / Google Sheets Sync Details';
+      body.innerHTML = bodyHtml || '';
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+    function closeStagingSyncModal() {
+      const modal = document.getElementById('stagingSyncModal');
+      if (modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+    }
+    async function refreshStagingCountsStatus() {
+      const el = document.getElementById('stagingCountsStatus');
+      try {
+        if (!appState.localDbReady) await initializeLocalDatabase();
+        const db = await openPosbLocalDb();
+        const local = await idbGetAll(db, 'staging');
+        const localOpen = local.filter(r => String(r.type || '').toLowerCase() === 'open').length;
+        const localClosed = local.filter(r => String(r.type || '').toLowerCase() === 'closed').length;
+        const stamp = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        const message = `Local DB: ${local.length.toLocaleString()} rows (Opened ${localOpen.toLocaleString()} / Closed ${localClosed.toLocaleString()}) • Google Sheets staging currently loaded: ${((appState.openStageRows||[]).length + (appState.closedStageRows||[]).length).toLocaleString()} rows • Last checked ${stamp}`;
+        if (el) el.textContent = message;
+        const headerEl = document.getElementById('stagingCountsStatusHeader');
+        if (headerEl) headerEl.textContent = message;
+      } catch (e) {
+        const message = 'Local DB / Google Sheets row counts unavailable: ' + (e.message || e);
+        if (el) el.textContent = message;
+        const headerEl = document.getElementById('stagingCountsStatusHeader');
+        if (headerEl) headerEl.textContent = message;
+      }
+    }
+    async function runManualStagingSync(downloadMissingFirst) {
+      const btn = document.getElementById(downloadMissingFirst ? 'btnDownloadMissingSync' : 'btnSyncStaging');
+      const original = btn ? btn.textContent : '';
+      if (btn) { btn.disabled = true; btn.textContent = downloadMissingFirst ? 'Downloading + syncing…' : 'Syncing…'; }
+      const beforeOpen = (appState.openStageRows || []).length;
+      const beforeClosed = (appState.closedStageRows || []).length;
+      try {
+        if (!appState.localDbReady) await initializeLocalDatabase();
+        if (downloadMissingFirst) {
+          // Merge remote staging records with local records before pushing the merged set back.
+          await restoreStagingData(true);
+        }
+        const openRows = appState.openStageRows || [];
+        const closedRows = appState.closedStageRows || [];
+        const openFiles = [...new Set(openRows.map(r => r.sourceFile).filter(Boolean))];
+        const closedFiles = [...new Set(closedRows.map(r => r.sourceFile).filter(Boolean))];
+        const result = await syncStagingToGoogle(true);
+        const stamp = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        setGoogleSyncStatus('Google Sheets: synced ' + stamp, 'ok');
+        await refreshStagingCountsStatus();
+        showStagingSyncModal(downloadMissingFirst ? 'Download Missing Data + Google Sync Complete' : 'Google Sheets Sync Complete',
+          `<p class="font-bold text-emerald-700 mb-3">Manual sync completed successfully at ${safePopupText(stamp)}.</p>
+           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+             <div class="rounded-lg border border-red-200 bg-red-50 p-3"><div class="text-xs font-bold text-red-800">Opened records sent</div><div class="text-2xl font-extrabold text-red-900">${openRows.length.toLocaleString()}</div><div class="text-xs mt-1">${openFiles.length.toLocaleString()} distinct file(s)</div></div>
+             <div class="rounded-lg border border-amber-200 bg-amber-50 p-3"><div class="text-xs font-bold text-amber-800">Closed records sent</div><div class="text-2xl font-extrabold text-amber-900">${closedRows.length.toLocaleString()}</div><div class="text-xs mt-1">${closedFiles.length.toLocaleString()} distinct file(s)</div></div>
+           </div>
+           ${downloadMissingFirst ? `<p><b>Before download/merge:</b> Opened ${beforeOpen.toLocaleString()} rows; Closed ${beforeClosed.toLocaleString()} rows.</p><p><b>After downloading and merging:</b> Opened ${openRows.length.toLocaleString()} rows; Closed ${closedRows.length.toLocaleString()} rows.</p>` : '<p>Local staging data has been copied to Google Sheets Open_Staging and Closed_Staging.</p>'}
+           <p class="mt-2"><b>Total rows copied to Google:</b> ${(openRows.length + closedRows.length).toLocaleString()}</p>
+           <p class="mt-2"><b>Files included:</b></p><ul class="list-disc pl-5"><li>Opened: ${openFiles.length ? openFiles.map(safePopupText).join(', ') : 'No named files recorded'}</li><li>Closed: ${closedFiles.length ? closedFiles.map(safePopupText).join(', ') : 'No named files recorded'}</li></ul>
+           <p class="mt-3 rounded-lg bg-slate-50 border p-3 text-xs">Google sync response: ${safePopupText(JSON.stringify(result || {ok:true}).slice(0,1200))}</p>`);
+      } catch (err) {
+        setGoogleSyncStatus('Google Sheets: sync failed', 'error');
+        showStagingSyncModal('Google Sheets Sync Failed', `<p class="font-bold text-red-700">Google sync could not be completed.</p><p class="mt-2">${safePopupText(err.message || err)}</p><p class="mt-3 text-xs">Your local database remains unchanged. Correct the connection/API issue and retry.</p>`);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = original; }
+        await refreshStagingCountsStatus();
+      }
+    }
+
     async function syncStagingToGoogle(userInitiated = false) {
       if (!appState.localDbReady) await initializeLocalDatabase();
-      const openRows = appState.openStageRows.map(r => ({ ...r, type: 'open' }));
-      const closedRows = appState.closedStageRows.map(r => ({ ...r, type: 'closed' }));
+      const openRows = dedupeStageRows(appState.openStageRows, 'open').rows.map(r => ({ ...r, type: 'open' }));
+      const closedRows = dedupeStageRows(appState.closedStageRows, 'closed').rows.map(r => ({ ...r, type: 'closed' }));
+      appState.openStageRows = openRows; appState.closedStageRows = closedRows;
+      await persistStagingToLocalDb();
       try {
         setStagingStatus('Uploading ' + (openRows.length + closedRows.length).toLocaleString() + ' staging records to Google Sheets…');
         const result = await postGoogleAction({
@@ -2599,6 +2748,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         appState.stagingReady = true;
         setStagingStatus('Google Sheets saved • Open_Staging: ' + openRows.length.toLocaleString() +
           ' rows • Closed_Staging: ' + closedRows.length.toLocaleString() + ' rows', 'ok');
+        await refreshStagingCountsStatus();
         return result;
       } catch (err) {
         setStagingStatus('Local DB saved; Google staging sync failed: ' + (err.message || err), 'error');
@@ -2765,7 +2915,7 @@ body.admin-unlocked [data-admin-only="true"] { visibility: visible; }
         const bySol = new Map((reportRows || []).map(r => [String(r.sol || '').trim(), r]));
         const headers = ['Date','office_id','SOL ID / BOCODE','Office Name','office-type-code','Division','Sub Division','SO Name','MIS','PPFGP','SSA','RD','SBBAS','SBSGP','SCSS','TD','Total Opened POSB','Total Closed POSB','Net Addition POSB'];
         const d = new Date(date + 'T00:00:00');
-        const dateLabel = Number.isNaN(d.getTime()) ? date : d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}).replace(/ /g,'-');
+        const dateLabel = `=\"${date}\"`; // Force Excel to display the literal ISO text yyyy-mm-dd regardless of regional date settings
         const offices = [...(appState.offices || [])].sort((a,b) => String(a.sol || '').localeCompare(String(b.sol || ''), undefined, {numeric:true}));
         const rows = offices.map(o => {
           const r = bySol.get(String(o.sol || '').trim()) || {};
